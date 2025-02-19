@@ -105,3 +105,6 @@ google-cloud-storage==2.19.0
 
 ## LDAP
 ldap3==2.9.1
+
+## Firecrawl
+firecrawl-py==1.12.0

@@ -3,19 +3,21 @@ import aiohttp
 import asyncio
 import urllib.parse
 import validators
-from typing import Any, AsyncIterator, Dict, Iterator, List, Sequence, Union
 
+from concurrent.futures import ThreadPoolExecutor
+from typing import Union, Sequence, Iterator, Any, AsyncIterator, Dict, Iterator, List, Dict, Optional
 
 from langchain_community.document_loaders import (
     WebBaseLoader,
 )
+from langchain_community.document_loaders.base import BaseLoader
 from langchain_core.documents import Document
-
+from langchain_community.document_loaders.firecrawl import FireCrawlLoader
 
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.config import ENABLE_RAG_LOCAL_WEB_FETCH
 from open_webui.env import SRC_LOG_LEVELS
-
+from typing import Literal
 import logging
 
 log = logging.getLogger(__name__)
@@ -66,6 +68,64 @@ def resolve_hostname(hostname):
     ipv6_addresses = [info[4][0] for info in addr_info if info[0] == socket.AF_INET6]
 
     return ipv4_addresses, ipv6_addresses
+
+
+class ConcurrentFireCrawlLoader(BaseLoader):
+    def __init__(
+        self,
+        web_path,
+        api_key: Optional[str] = None,
+        api_url: Optional[str] = None,
+        mode: Literal["crawl", "scrape", "map"] = "crawl",
+        max_threads: Optional[int] = None,
+        params: Optional[Dict] = None,
+    ):
+        """Concurrent document loader for FireCrawl operations.
+        
+        Executes multiple FireCrawlLoader instances concurrently using thread pooling
+        to improve bulk processing efficiency.
+
+        Args:
+            web_path: List of URLs/paths to process.
+            api_key: API key for FireCrawl service. Defaults to None 
+                (uses FIRE_CRAWL_API_KEY environment variable if not provided).
+            api_url: Base URL for FireCrawl API. Defaults to official API endpoint.
+            mode: Operation mode selection:
+                - 'crawl': Website crawling mode (default)
+                - 'scrape': Direct page scraping
+                - 'map': Site map generation
+            max_threads: Maximum concurrent threads. Defaults to None 
+                (auto-configures based on CPU cores).
+            params: The parameters to pass to the Firecrawl API.
+                Examples include crawlerOptions.
+                For more details, visit: https://github.com/mendableai/firecrawl-py
+        """
+        self.sub_loaders = [
+            FireCrawlLoader(
+                url=url,
+                api_key=api_key,
+                api_url=api_url,
+                mode=mode,
+                params=params
+            ) for url in web_path
+        ]
+        assert max_threads is None or max_threads > 0, "max_threads must be a positive integer."
+        if max_threads is not None:
+            assert type(max_threads) == int, "max_threads must be None or an integer."
+        self.max_threads = max_threads
+
+    def lazy_load(self):
+        executor = ThreadPoolExecutor(max_workers=self.max_threads)
+        futures = [executor.submit(loader.load) for loader in self.sub_loaders]
+        for future in futures:
+            try:
+                doc = future.result()
+                if doc is not None:
+                    if type(doc) == list:
+                        doc = doc[0]
+                    yield doc
+            except Exception as e:
+                log.error(f"Error processing URL: {e}")
 
 
 class SafeWebBaseLoader(WebBaseLoader):
@@ -181,17 +241,30 @@ class SafeWebBaseLoader(WebBaseLoader):
 
 def get_web_loader(
     urls: Union[str, Sequence[str]],
+    loader_type: Literal["web", "firecrawl"] = "web",
     verify_ssl: bool = True,
     requests_per_second: int = 2,
     trust_env: bool = False,
+    max_threads: Optional[int] = None,
+    firecrawl_api_key: Optional[str] = None,
+    firecrawl_api_url: Optional[str] = None,
 ):
     # Check if the URLs are valid
     safe_urls = safe_validate_urls([urls] if isinstance(urls, str) else urls)
-
-    return SafeWebBaseLoader(
-        web_path=safe_urls,
-        verify_ssl=verify_ssl,
-        requests_per_second=requests_per_second,
-        continue_on_failure=True,
-        trust_env=trust_env,
-    )
+    if loader_type == "web":
+        return SafeWebBaseLoader(
+            web_path=safe_urls,
+            verify_ssl=verify_ssl,
+            requests_per_second=requests_per_second,
+            continue_on_failure=True,
+            trust_env=trust_env
+        )
+    elif loader_type == "firecrawl":
+        return ConcurrentFireCrawlLoader(
+            safe_urls,
+            api_key=firecrawl_api_key,
+            api_url=firecrawl_api_url,
+            max_threads=max_threads,
+        )
+    else:
+        raise ValueError(ERROR_MESSAGES.INVALID_LOADER_TYPE)

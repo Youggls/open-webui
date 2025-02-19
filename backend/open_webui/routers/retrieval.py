@@ -1110,6 +1110,10 @@ def process_web(
             form_data.url,
             verify_ssl=request.app.state.config.ENABLE_RAG_WEB_LOADER_SSL_VERIFICATION,
             requests_per_second=request.app.state.config.RAG_WEB_SEARCH_CONCURRENT_REQUESTS,
+            loader_type=request.app.state.config.WEB_LOADER_TYPE,
+            firecrawl_api_key=request.app.state.config.FIRECRAWL_API_KEY,
+            firecrawl_api_url=request.app.state.config.FIRECRAWL_API_BASE_URL,
+            trust_env=request.app.state.config.RAG_WEB_SEARCH_TRUST_ENV,
         )
         docs = loader.load()
         content = " ".join([doc.page_content for doc in docs])
@@ -1356,6 +1360,9 @@ async def process_web_search(
             verify_ssl=request.app.state.config.ENABLE_RAG_WEB_LOADER_SSL_VERIFICATION,
             requests_per_second=request.app.state.config.RAG_WEB_SEARCH_CONCURRENT_REQUESTS,
             trust_env=request.app.state.config.RAG_WEB_SEARCH_TRUST_ENV,
+            loader_type=request.app.state.config.WEB_LOADER_TYPE,
+            firecrawl_api_key=request.app.state.config.FIRECRAWL_API_KEY,
+            firecrawl_api_url=request.app.state.config.FIRECRAWL_API_BASE_URL,
         )
         docs = await loader.aload()
 
